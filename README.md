@@ -1,12 +1,26 @@
 # Phasewatch
 
-Interactive dashboard for visualizing data from **Shelly energy monitors**. Supports both 3-phase (**Shelly Pro 3EM**) and 1-phase (**Shelly 1EM / Pro EM**) CSV exports — the format is detected automatically on load. Single static HTML file — no build step, no server, just open in a browser.
+Interactive dashboard for visualizing data from **Shelly energy monitors**. Supports both 3-phase (**Shelly Pro 3EM**) and 1-phase (**Shelly 1EM / Pro EM**) CSV exports — the format is detected automatically on load. Built with Vite + TypeScript, deployed as a static site.
 
 ## Quick Start
 
-1. Open `index.html` in your browser
-2. Drag & drop your Shelly CSV export (or click "Load CSV")
-3. Explore your electricity data
+```bash
+nvm use           # Node 24 (pinned in .nvmrc)
+npm install
+npm run dev       # Vite dev server with HMR
+```
+
+Then drag & drop your Shelly CSV export (or click "Load CSV") in the browser.
+
+## Scripts
+
+| Command | Purpose |
+|---------|---------|
+| `npm run dev` | Vite dev server with HMR |
+| `npm run build` | Type-check and build to `dist/` |
+| `npm run preview` | Serve the built `dist/` locally |
+| `npm run lint` | ESLint over `src/**/*.ts` |
+| `npm run format` | Prettier |
 
 ## Features
 
@@ -32,9 +46,12 @@ For 1-phase files the per-phase breakdown collapses to a single series with no "
 
 ## Tech Stack
 
-- [Apache ECharts 5.5.0](https://echarts.apache.org/) — charts and interactivity (loaded from CDN)
-- [PapaParse 5.4.1](https://www.papaparse.com/) — CSV parsing (loaded from CDN)
-- Single self-contained HTML file with inline CSS and JS
+- [Vite](https://vitejs.dev/) — build tool, dev server, HMR
+- [TypeScript](https://www.typescriptlang.org/) — strict mode
+- [Apache ECharts 5.5](https://echarts.apache.org/) — charts and interactivity (via npm)
+- [PapaParse 5.4](https://www.papaparse.com/) — CSV parsing in a web worker (via npm)
+- ESLint + Prettier
+- No runtime framework — plain DOM + ECharts
 
 ## Performance
 
@@ -57,6 +74,26 @@ Both are at 60-second intervals.
 | **Neutral** (3-phase only) | Min/max/avg current |
 
 For the 3-phase format the per-phase columns follow the pattern `{phase}_{metric}` — e.g. `a_avg_voltage`, `b_max_act_power`, `c_total_act_energy`. For 1-phase the `{phase}_` prefix is dropped.
+
+## Project Structure
+
+```
+src/
+├─ main.ts            # entrypoint: wires DOM + orchestrates renders
+├─ types.ts           # Row, Schema, Dataset, Point, Band
+├─ constants.ts       # COLORS, voltage thresholds, MAX_POINTS
+├─ csv/               # schema detection + PapaParse wrapper
+├─ data/              # LTTB downsampling + aggregation helpers
+├─ charts/            # one module per ECharts chart + shared helpers
+├─ ui/                # status cards, summary table, data info, format, file drop
+└─ styles/            # base.css, layout.css, components.css
+```
+
+See [`CLAUDE.md`](CLAUDE.md) for architecture notes and conventions.
+
+## Deployment
+
+Pushes to `main` trigger `.github/workflows/static.yml`: `npm ci && npm run build`, then `dist/` is uploaded to GitHub Pages. `vite.config.ts` sets `base: './'` so assets resolve under the Pages subpath.
 
 ## Theme
 

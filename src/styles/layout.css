@@ -1,0 +1,94 @@
+.container {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 24px 60px;
+}
+
+header {
+  padding: 24px 0 16px;
+  border-bottom: 1px solid var(--grid);
+  margin-bottom: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+header h1 .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), #0EA5E9);
+  color: var(--bg);
+  font-size: 1.2rem;
+}
+
+/* Dashboard content */
+#dashboard { display: none; }
+#dashboard.active { display: block; }
+
+/* Status cards layout */
+.status-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+/* Two-column layout for smaller charts */
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 900px) {
+  .charts-grid { grid-template-columns: 1fr; }
+}
+
+/* Data info bar */
+.data-info {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  margin-bottom: 16px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.data-info span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-info .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  header { flex-direction: column; align-items: flex-start; }
+  .status-cards { grid-template-columns: 1fr 1fr; }
+  .chart-header { flex-direction: column; align-items: flex-start; }
+}

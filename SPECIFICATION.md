@@ -1,6 +1,6 @@
 # Phasewatch — Complete Specification
 
-> A single-file, static HTML dashboard for visualizing electricity monitoring data from Shelly energy meters. Supports 3-phase (Shelly Pro 3EM) and 1-phase (Shelly 1EM / Pro EM) CSV exports with automatic format detection. This document contains everything needed to regenerate the application from scratch.
+> A static dashboard for visualizing electricity monitoring data from Shelly energy meters. Supports 3-phase (Shelly Pro 3EM) and 1-phase (Shelly 1EM / Pro EM) CSV exports with automatic format detection. Built with Vite + TypeScript; deploys to GitHub Pages. This document contains everything needed to regenerate the application from scratch.
 
 ---
 
@@ -17,7 +17,7 @@
 9. [Performance](#9-performance)
 10. [Responsive Design](#10-responsive-design)
 11. [Alerts and Thresholds](#11-alerts-and-thresholds)
-12. [File Structure](#12-file-structure)
+12. [Build and Deployment](#12-build-and-deployment)
 13. [Future Enhancements](#13-future-enhancements)
 
 ---
@@ -27,7 +27,7 @@
 **Name:** Phasewatch
 **Purpose:** Interactive electricity monitoring dashboard that visualizes CSV data exported from Shelly energy meters. Supports **Shelly Pro 3EM** (3-phase) and **Shelly 1EM / Pro EM** (1-phase) with automatic format detection. Focused on voltage monitoring, consumption patterns, and power analysis.
 
-**Key Principle:** Zero infrastructure. The user opens a single HTML file in their browser, loads a CSV via file picker or drag-and-drop, and immediately sees their electricity data visualized.
+**Key Principle:** Zero infrastructure at runtime. The dashboard is a static site — once built, it's a plain HTML + JS + CSS bundle served from GitHub Pages. The user loads a CSV via file picker or drag-and-drop and immediately sees their electricity data visualized; nothing talks to a server.
 
 ---
 
@@ -41,7 +41,7 @@
 - Show daily energy consumption breakdown
 - Provide summary statistics for all key metrics
 - Warn when voltage is outside EU EN 50160 tolerance (230V ±10% = 207–253V)
-- Work offline — no server, no build step, no installation
+- Work entirely in the browser — no backend, no server, no persistence
 - Handle ~50,000 rows of data smoothly in the browser
 
 ### Non-Goals (v1)
@@ -159,77 +159,121 @@ On parse completion, the first non-empty row's keys are inspected:
 
 ### Technology Stack
 
-| Component | Technology | Version | Source |
-|-----------|-----------|---------|--------|
-| Charting | Apache ECharts | 5.5.0 | CDN: `cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js` |
-| CSV parsing | PapaParse | 5.4.1 | CDN: `cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js` |
-| Styling | Inline CSS | — | CSS custom properties, Grid, Flexbox |
-| JavaScript | Vanilla JS (ES6+) | — | IIFE pattern, no framework |
+| Component | Technology | Version | Notes |
+|-----------|-----------|---------|-------|
+| Build tool | Vite | ^5.4 | Dev server with HMR, production bundling |
+| Language | TypeScript | ^5.5 | `strict`, `noUncheckedIndexedAccess`, ES2022 target |
+| Charting | Apache ECharts | ^5.5 | npm (`echarts`) |
+| CSV parsing | PapaParse | ^5.4 | npm (`papaparse`), `@types/papaparse` |
+| Styling | Plain CSS | — | CSS custom properties, Grid, Flexbox; split into base/layout/components |
+| Linting | ESLint flat config + Prettier | ^9 / ^3 | — |
+| Node | 24 (pinned in `.nvmrc`) | — | `node-version-file: '.nvmrc'` in CI |
+| Hosting | GitHub Pages | — | `.github/workflows/static.yml` builds and uploads `dist/` |
 
 ### Why These Choices
 
 - **ECharts over Chart.js/Plotly:** Best built-in support for time-series interactivity (dataZoom slider, inside zoom/pan), custom series for band rendering, grouped bar charts, tooltip formatting. Single library handles all chart types needed.
-- **PapaParse:** Industry-standard CSV parser with web worker support for non-blocking parsing of large files.
-- **No framework:** A single dashboard page with 6 chart sections does not justify React/Vue overhead. Vanilla JS with ECharts handles all state via chart instances.
-- **No build step:** Single HTML file with CDN dependencies means zero setup. Open in browser and go.
+- **PapaParse:** Industry-standard CSV parser with web-worker support for non-blocking parsing of large files.
+- **No framework:** A single dashboard page with six render sections does not justify React/Vue overhead. Vanilla TS with ECharts handles all state via chart instances.
+- **Vite:** HMR during development, trivial static build, out-of-the-box TypeScript. `base: './'` is set so built assets resolve under the GitHub Pages subpath.
+
+### Project Structure
+
+```
+phasewatch/
+├── index.html              # Lean shell: head + body markup, loads /src/main.ts
+├── package.json            # Scripts: dev, build, preview, lint, format
+├── tsconfig.json           # strict + noUncheckedIndexedAccess, ES2022
+├── vite.config.ts          # base: './', sourcemaps on
+├── eslint.config.js        # flat config, @typescript-eslint + prettier
+├── .prettierrc
+├── .nvmrc                  # "24"
+├── src/
+│   ├── main.ts             # Entrypoint: imports CSS, wires DOM, orchestrates renders
+│   ├── types.ts            # Row, Schema, Phase, Dataset, Point, Band
+│   ├── constants.ts        # COLORS, VOLTAGE_* thresholds, MAX_POINTS
+│   ├── csv/
+│   │   ├── schema.ts       # detectSchema, SCHEMA_3PHASE, SCHEMA_1PHASE
+│   │   └── load.ts         # parseCsv(file): Promise<Row[]> — PapaParse worker wrapper
+│   ├── data/
+│   │   ├── downsample.ts   # lttbDownsample, downsampleSeries, downsampleBand
+│   │   └── aggregate.ts    # avg
+│   ├── charts/
+│   │   ├── shared.ts       # tooltipStyle, dataZoomConfig, setupTimeRangeButtons,
+│   │   │                   # setActiveButton, bandColor
+│   │   ├── voltage.ts      # renderVoltageChart (+ band custom series)
+│   │   ├── voltageHeatmap.ts
+│   │   ├── dailyEnergy.ts
+│   │   └── power.ts
+│   ├── ui/
+│   │   ├── format.ts       # formatDate, formatDateTime
+│   │   ├── dataInfo.ts
+│   │   ├── statusCards.ts
+│   │   ├── summaryTable.ts
+│   │   └── fileDrop.ts     # wireFileDrop({ fileInput, dropZone, onFile })
+│   └── styles/
+│       ├── base.css        # reset, :root custom properties, body
+│       ├── layout.css      # container, header, grids, responsive
+│       └── components.css  # cards, chart-section, table, buttons, overlays
+└── .github/workflows/static.yml  # npm ci → npm run build → upload dist/
+```
 
 ### Data Flow
 
 ```
 CSV File (user picks via file input or drag-and-drop)
-  → PapaParse (web worker mode, header: true, dynamicTyping: true)
-  → rawData[] array (objects with typed fields)
-  → detectSchema(rawData[0]) → schema (3-phase or 1-phase)
-  → timestamps[] array (Unix ms, derived from rawData[].timestamp * 1000)
-  → dataRange { min, max } (ms timestamps)
-  → Render pipeline:
-      → renderDataInfo()        — info bar with record count, date range
-      → renderStatusCards()     — latest voltage per phase, total power
-      → renderVoltageChart()    — main time-series chart
-      → renderVoltageHeatmap()  — hourly voltage averages
-      → renderDailyEnergyChart() — daily kWh stacked bars
-      → renderPowerChart()      — power consumption stacked area
-      → renderSummaryTable()    — min/max/avg statistics
+  → wireFileDrop → onFile(file)
+  → parseCsv(file)          — PapaParse in web worker, header: true, dynamicTyping
+  → Row[] array
+  → filter (valid timestamp) + sort ascending
+  → detectSchema(rows[0])   — 3-phase vs 1-phase
+  → build Dataset { rawData, timestamps (ms), dataRange, schema }
+  → Render pipeline (main.ts passes the Dataset to each):
+      → renderDataInfo       — record count, date range
+      → renderStatusCards    — latest voltage per phase, total power
+      → renderVoltageChart   — main time-series
+      → renderVoltageHeatmap — hourly voltage averages
+      → renderDailyEnergyChart — daily kWh stacked bars
+      → renderPowerChart     — power stacked area
+      → renderSummaryTable   — min/max/avg statistics
 ```
 
 ### Schema
 
-A `schema` object is computed once per load and drives every render function. It captures the two things that differ between 3-phase and 1-phase CSVs: the list of phases and how to resolve a per-phase column name.
+A `Schema` object is computed once per load (`src/csv/schema.ts`) and drives every render function. It captures the two things that differ between 3-phase and 1-phase CSVs: the list of phases and how to resolve a per-phase column name.
 
-```javascript
-SCHEMA_3PHASE = {
+```typescript
+export const SCHEMA_3PHASE: Schema = {
   kind: '3phase',
   phases: [
     { key: 'a', name: 'Phase A', color: COLORS.phaseA },
     { key: 'b', name: 'Phase B', color: COLORS.phaseB },
-    { key: 'c', name: 'Phase C', color: COLORS.phaseC }
+    { key: 'c', name: 'Phase C', color: COLORS.phaseC },
   ],
-  col: (phaseKey, metric) => `${phaseKey}_${metric}`
-}
+  col(phaseKey, metric) { return phaseKey + '_' + metric; },
+};
 
-SCHEMA_1PHASE = {
+export const SCHEMA_1PHASE: Schema = {
   kind: '1phase',
   phases: [{ key: '', name: 'Voltage', color: COLORS.accent }],
-  col: (phaseKey, metric) => metric  // phaseKey ignored
-}
+  col(_phaseKey, metric) { return metric; },
+};
 ```
 
 Render functions iterate `schema.phases` and read values as `r[schema.col(p.key, 'avg_voltage')]`. The same code path produces three series for 3-phase CSVs and one for 1-phase. "Total" aggregations (total-power card, tooltip Total rows, summary Total row) are hidden when `schema.phases.length === 1` because the aggregate is identical to the single series.
 
 ### State Management
 
-All state is held in module-scoped variables inside a single IIFE:
+A `Dataset` object is constructed once per load and passed explicitly to each render function — there is no global mutable store. Each chart module holds its own ECharts instance in a file-local `let chart` and disposes it before re-init so re-loading a CSV does not leak.
 
-| Variable | Type | Purpose |
-|----------|------|---------|
-| `rawData` | `Object[]` | Full parsed CSV rows (filtered for valid timestamps, sorted ascending) |
-| `timestamps` | `number[]` | Unix ms timestamps, parallel to rawData indices |
-| `dataRange` | `{min, max}` | First and last timestamp in ms |
-| `schema` | `Schema` | Detected CSV shape (see §4.2) |
-| `voltageChart` | `ECharts instance` | Main voltage over time chart |
-| `voltageHeatmapChart` | `ECharts instance` | Voltage by hour of day |
-| `dailyEnergyChart` | `ECharts instance` | Daily energy stacked bars |
-| `powerChart` | `ECharts instance` | Power consumption stacked area |
+| Field | Type | Purpose |
+|-------|------|---------|
+| `Dataset.rawData` | `Row[]` | Full parsed CSV rows (filtered for valid timestamps, sorted ascending) |
+| `Dataset.timestamps` | `number[]` | Unix ms timestamps, parallel to `rawData` indices |
+| `Dataset.dataRange` | `{ min, max }` | First and last timestamp in ms |
+| `Dataset.schema` | `Schema` | Detected CSV shape (see above) |
+
+The only module-level mutable state in `main.ts` is a `charts: ECharts[]` array used by the window-resize handler to call `.resize()` on each chart.
 
 ---
 
@@ -555,15 +599,16 @@ Both use `filterMode: 'none'` to avoid data filtering artifacts.
 - `dragover` prevented (enables drop)
 - On `drop`: checks file extension is `.csv`, calls `loadFile()`
 
-**Parse pipeline:**
-```javascript
-Papa.parse(file, {
+**Parse pipeline:** `parseCsv(file)` in `src/csv/load.ts` wraps PapaParse in a Promise:
+
+```typescript
+Papa.parse<Row>(file, {
   header: true,         // First row as column names → object keys
   dynamicTyping: true,  // Auto-convert numbers
   skipEmptyLines: true,
-  worker: true,         // Parse in web worker (non-blocking)
-  complete: callback,
-  error: callback
+  worker: true,         // Parse in a web worker (non-blocking)
+  complete: (results) => resolve(results.data),
+  error: reject,
 });
 ```
 
@@ -725,40 +770,60 @@ The voltage chart includes a dashed reference line at 230V with a "230V" label, 
 
 ---
 
-## 12. File Structure
+## 12. Build and Deployment
 
+### Scripts
+
+| Command | Purpose |
+|---------|---------|
+| `npm run dev` | Vite dev server with HMR |
+| `npm run build` | `tsc --noEmit && vite build` — type-check then bundle to `dist/` |
+| `npm run preview` | Serve the built `dist/` locally |
+| `npm run lint` | ESLint over `src/**/*.ts` |
+| `npm run format` | Prettier over `src` and top-level files |
+
+### Node version
+
+Pinned in `.nvmrc` (currently `24`). CI reads it via `node-version-file: '.nvmrc'`. Locally: `nvm use`.
+
+### Dependencies
+
+Runtime:
+- `echarts` (^5.5)
+- `papaparse` (^5.4)
+
+Development:
+- `vite`, `typescript`
+- `@types/papaparse`
+- `eslint`, `@typescript-eslint/{parser,eslint-plugin}`, `prettier`, `eslint-config-prettier`
+
+No other external dependencies — no runtime framework, no CSS preprocessor.
+
+### Vite config
+
+```typescript
+// vite.config.ts
+export default defineConfig({
+  base: './',          // So Pages subpath works
+  build: {
+    outDir: 'dist',
+    sourcemap: true,
+  },
+});
 ```
-phasewatch/
-├── index.html              # Complete application (single file, ~1,600 lines)
-│   ├── <head>
-│   │   ├── PapaParse CDN script
-│   │   ├── ECharts CDN script
-│   │   └── <style> (all CSS, ~460 lines)
-│   ├── <body>
-│   │   ├── HTML structure (~130 lines)
-│   │   └── <script> (all JS, ~1,000 lines)
-│   │       ├── Constants and DOM refs
-│   │       ├── Schema definitions and detection
-│   │       ├── LTTB downsampling functions
-│   │       ├── File handling (input + drag/drop)
-│   │       ├── Data processing pipeline
-│   │       ├── Render functions (6 components)
-│   │       └── Helper utilities
-├── README.md               # User-facing documentation
-├── SPECIFICATION.md         # This file
-├── CLAUDE.md               # Guidance for Claude Code
-├── testdata/               # Sample Shelly CSVs (3-phase + 1-phase), gitignored
-└── .gitignore              # Ignores *.csv
-```
 
-### CDN Dependencies
+### GitHub Pages deployment
 
-```html
-<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-```
+`.github/workflows/static.yml` triggers on pushes to `main`:
 
-No other external dependencies.
+1. Checkout
+2. Setup Node from `.nvmrc` (with npm cache)
+3. `npm ci`
+4. `npm run build`
+5. `actions/upload-pages-artifact` with `path: 'dist'`
+6. `actions/deploy-pages`
+
+The project source tree is detailed in §4 Project Structure.
 
 ---
 
