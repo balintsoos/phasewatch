@@ -1,6 +1,6 @@
 # Phasewatch — Complete Specification
 
-> A single-file, static HTML dashboard for visualizing 3-phase electricity monitoring data from a Shelly Pro 3EM device. This document contains everything needed to regenerate the application from scratch.
+> A single-file, static HTML dashboard for visualizing electricity monitoring data from Shelly energy meters. Supports 3-phase (Shelly Pro 3EM) and 1-phase (Shelly 1EM / Pro EM) CSV exports with automatic format detection. This document contains everything needed to regenerate the application from scratch.
 
 ---
 
@@ -25,7 +25,7 @@
 ## 1. Project Overview
 
 **Name:** Phasewatch
-**Purpose:** Interactive electricity monitoring dashboard that visualizes CSV data exported from a Shelly Pro 3EM 3-phase energy meter. Focused on voltage monitoring, consumption patterns, and power analysis.
+**Purpose:** Interactive electricity monitoring dashboard that visualizes CSV data exported from Shelly energy meters. Supports **Shelly Pro 3EM** (3-phase) and **Shelly 1EM / Pro EM** (1-phase) with automatic format detection. Focused on voltage monitoring, consumption patterns, and power analysis.
 
 **Key Principle:** Zero infrastructure. The user opens a single HTML file in their browser, loads a CSV via file picker or drag-and-drop, and immediately sees their electricity data visualized.
 
@@ -57,11 +57,14 @@
 
 ## 3. Data Source
 
-### Device
+### Supported devices
 
-**Shelly Pro 3EM** — a DIN-rail mounted 3-phase energy meter that monitors voltage, current, power, and energy on three phases (A, B, C) plus neutral current.
+- **Shelly Pro 3EM** — DIN-rail mounted 3-phase energy meter. Monitors voltage, current, power, and energy on three phases (A, B, C) plus neutral current.
+- **Shelly 1EM / Pro EM** — Single-phase energy meter. Same metrics as the Pro 3EM minus the phase prefix and neutral current.
 
-### CSV Format
+The CSV format is auto-detected from column names on load. Everything downstream of the parse step is schema-driven; see §4.2 Schema.
+
+### CSV Format — 3-phase (Shelly Pro 3EM)
 
 **Filename pattern:** `emdata_<DEVICE_ID>_<DATE>.csv`
 **Example:** `emdata_ECC9FFE83E40_2026-03-20.csv`
@@ -120,6 +123,36 @@ Where `{x}` is `a`, `b`, or `c` for Phase A, B, C respectively. Each phase has 1
 | Phase C | Typically the lightest load |
 | Energy values | Per-interval (Wh per minute), NOT cumulative |
 
+### CSV Format — 1-phase (Shelly 1EM / Pro EM)
+
+**Filename pattern:** `emdata_<DEVICE_ID>_<DATE>.csv` (same as 3-phase)
+
+**Structure:** 15 columns, rows at 60-second intervals. Column names are **identical to the 3-phase per-phase metrics but without the `a_` / `b_` / `c_` prefix**, and there are no `n_*` neutral-current columns.
+
+#### Header Row (exact column names)
+
+```
+timestamp,total_act_energy,total_act_ret_energy,lag_react_energy,lead_react_energy,max_act_power,min_act_power,max_aprt_power,min_aprt_power,max_voltage,min_voltage,avg_voltage,max_current,min_current,avg_current
+```
+
+Note that fundamental-harmonic energy columns (`fund_act_energy`, `fund_act_ret_energy`) that exist in the 3-phase export are absent here.
+
+#### Sample Data Row
+
+```csv
+1654494480,22.7645,0.0000,0.0000,0.0000,1880.7,939.6,1899.1,979.7,212.820,209.130,210.800,8.980,4.601,6.730
+```
+
+### Detection
+
+On parse completion, the first non-empty row's keys are inspected:
+
+| Found | Schema |
+|-------|--------|
+| `a_avg_voltage` | 3-phase |
+| `avg_voltage` (and no `a_avg_voltage`) | 1-phase |
+| Neither | Reject with a user-visible alert; no dashboard render |
+
 ---
 
 ## 4. Architecture
@@ -146,6 +179,7 @@ Where `{x}` is `a`, `b`, or `c` for Phase A, B, C respectively. Each phase has 1
 CSV File (user picks via file input or drag-and-drop)
   → PapaParse (web worker mode, header: true, dynamicTyping: true)
   → rawData[] array (objects with typed fields)
+  → detectSchema(rawData[0]) → schema (3-phase or 1-phase)
   → timestamps[] array (Unix ms, derived from rawData[].timestamp * 1000)
   → dataRange { min, max } (ms timestamps)
   → Render pipeline:
@@ -158,6 +192,30 @@ CSV File (user picks via file input or drag-and-drop)
       → renderSummaryTable()    — min/max/avg statistics
 ```
 
+### Schema
+
+A `schema` object is computed once per load and drives every render function. It captures the two things that differ between 3-phase and 1-phase CSVs: the list of phases and how to resolve a per-phase column name.
+
+```javascript
+SCHEMA_3PHASE = {
+  kind: '3phase',
+  phases: [
+    { key: 'a', name: 'Phase A', color: COLORS.phaseA },
+    { key: 'b', name: 'Phase B', color: COLORS.phaseB },
+    { key: 'c', name: 'Phase C', color: COLORS.phaseC }
+  ],
+  col: (phaseKey, metric) => `${phaseKey}_${metric}`
+}
+
+SCHEMA_1PHASE = {
+  kind: '1phase',
+  phases: [{ key: '', name: 'Voltage', color: COLORS.accent }],
+  col: (phaseKey, metric) => metric  // phaseKey ignored
+}
+```
+
+Render functions iterate `schema.phases` and read values as `r[schema.col(p.key, 'avg_voltage')]`. The same code path produces three series for 3-phase CSVs and one for 1-phase. "Total" aggregations (total-power card, tooltip Total rows, summary Total row) are hidden when `schema.phases.length === 1` because the aggregate is identical to the single series.
+
 ### State Management
 
 All state is held in module-scoped variables inside a single IIFE:
@@ -167,6 +225,7 @@ All state is held in module-scoped variables inside a single IIFE:
 | `rawData` | `Object[]` | Full parsed CSV rows (filtered for valid timestamps, sorted ascending) |
 | `timestamps` | `number[]` | Unix ms timestamps, parallel to rawData indices |
 | `dataRange` | `{min, max}` | First and last timestamp in ms |
+| `schema` | `Schema` | Detected CSV shape (see §4.2) |
 | `voltageChart` | `ECharts instance` | Main voltage over time chart |
 | `voltageHeatmapChart` | `ECharts instance` | Voltage by hour of day |
 | `dailyEnergyChart` | `ECharts instance` | Daily energy stacked bars |
@@ -333,19 +392,20 @@ Horizontal flex row showing:
 
 CSS Grid: `grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))`, 16px gap.
 
-**Per-phase card (3x):**
-- Left edge: 4px tall colored bar (phase color)
-- Label: "Phase X Voltage" (uppercase, muted)
+**Per-phase card (3× for 3-phase, 1× for 1-phase):**
+- Left edge: 4px tall colored bar (phase color — accent cyan for the 1-phase single card)
+- Label: "Phase X Voltage" for 3-phase; just "Voltage" for 1-phase
 - Value: voltage in V (1.75rem, bold)
 - Warning badge: "OUT OF RANGE" if voltage < 207V or > 253V (red background)
 - Detail: "Range: min – max V"
 - Warning state: red border, red-tinted background, red value text
 
-**Total power card (1x):**
-- Left edge: cyan bar
-- Label: "Total Power (latest)"
-- Value: total W or kW (auto-formatted, cyan colored)
-- Detail: per-phase power breakdown
+**Power card:**
+- 3-phase: "Total Power (latest)" summing all three phases, with per-phase breakdown in the detail line
+- 1-phase: "Power (latest)" showing the single phase's `max_act_power`, no breakdown line
+- Left edge: cyan bar; value in cyan
+
+Auto-formatted to kW when ≥ 1000W.
 
 ### 6.8 Chart Sections
 
@@ -376,11 +436,14 @@ Full-width table with horizontal scroll wrapper.
 | Max Power (W) | Right |
 | Total Energy (kWh) | Right |
 
-Rows: Phase A, Phase B, Phase C, **Total** (bold, top border, dashes for non-aggregatable columns).
+Rows (3-phase): Phase A, Phase B, Phase C, **Total** (bold, top border, dashes for non-aggregatable columns).
+Rows (1-phase): single "Voltage" row (accent dot). The Total row is omitted — it would duplicate the single data row.
 
 ---
 
 ## 7. Charts Specification
+
+For 1-phase CSVs every multi-phase construct below collapses to a single series: the three "A/B/C" line/band/bar series become one "Voltage" / "Power" series in the accent cyan color, and tooltip "Total" rows are suppressed because the aggregate equals the single value. The chart types, axes, zoom behavior, and layout are otherwise unchanged.
 
 ### 7.1 Voltage Over Time (Main Chart)
 
@@ -675,6 +738,7 @@ phasewatch/
 │   │   ├── HTML structure (~130 lines)
 │   │   └── <script> (all JS, ~1,000 lines)
 │   │       ├── Constants and DOM refs
+│   │       ├── Schema definitions and detection
 │   │       ├── LTTB downsampling functions
 │   │       ├── File handling (input + drag/drop)
 │   │       ├── Data processing pipeline
@@ -682,6 +746,8 @@ phasewatch/
 │   │       └── Helper utilities
 ├── README.md               # User-facing documentation
 ├── SPECIFICATION.md         # This file
+├── CLAUDE.md               # Guidance for Claude Code
+├── testdata/               # Sample Shelly CSVs (3-phase + 1-phase), gitignored
 └── .gitignore              # Ignores *.csv
 ```
 

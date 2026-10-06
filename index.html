@@ -633,6 +633,34 @@ header h1 .icon {
   let rawData = [];
   let timestamps = [];
   let dataRange = { min: 0, max: 0 };
+  let schema = null;
+
+  // ===== Schema =====
+  // Describes the shape of the loaded CSV so render functions work for both
+  // 3-phase (Shelly Pro 3EM) and 1-phase (Shelly 1EM / Pro EM) exports.
+  const SCHEMA_3PHASE = {
+    kind: '3phase',
+    phases: [
+      { key: 'a', name: 'Phase A', color: COLORS.phaseA },
+      { key: 'b', name: 'Phase B', color: COLORS.phaseB },
+      { key: 'c', name: 'Phase C', color: COLORS.phaseC }
+    ],
+    col: function(phaseKey, metric) { return phaseKey + '_' + metric; }
+  };
+  const SCHEMA_1PHASE = {
+    kind: '1phase',
+    phases: [
+      { key: '', name: 'Voltage', color: COLORS.accent }
+    ],
+    col: function(phaseKey, metric) { return metric; }
+  };
+
+  function detectSchema(row) {
+    if (!row) return null;
+    if ('a_avg_voltage' in row) return SCHEMA_3PHASE;
+    if ('avg_voltage' in row) return SCHEMA_1PHASE;
+    return null;
+  }
 
   // ===== LTTB Downsampling =====
   function lttbDownsample(xArr, yArr, threshold) {
@@ -777,7 +805,19 @@ header h1 .icon {
   // ===== Data processing =====
   function processData(data) {
     // Filter out rows with missing timestamp
-    rawData = data.filter(r => r.timestamp && !isNaN(r.timestamp));
+    const filtered = data.filter(r => r.timestamp && !isNaN(r.timestamp));
+    if (filtered.length === 0) {
+      alert('No valid rows found in CSV. The file must contain a "timestamp" column with numeric values.');
+      return;
+    }
+
+    schema = detectSchema(filtered[0]);
+    if (!schema) {
+      alert('Unrecognized CSV format. Expected Shelly Pro 3EM (columns like "a_avg_voltage") or Shelly 1EM / Pro EM (columns like "avg_voltage").');
+      return;
+    }
+
+    rawData = filtered;
     rawData.sort((a, b) => a.timestamp - b.timestamp);
 
     timestamps = rawData.map(r => r.timestamp * 1000); // to ms
@@ -838,48 +878,59 @@ header h1 .icon {
     const latest = rawData[rawData.length - 1];
     const container = document.getElementById('status-cards');
 
-    const phases = [
-      { key: 'a', name: 'Phase A', color: COLORS.phaseA },
-      { key: 'b', name: 'Phase B', color: COLORS.phaseB },
-      { key: 'c', name: 'Phase C', color: COLORS.phaseC }
-    ];
-
+    const isSinglePhase = schema.phases.length === 1;
     let totalPower = 0;
     let html = '';
 
-    for (const p of phases) {
-      const voltage = latest[p.key + '_avg_voltage'];
+    for (const p of schema.phases) {
+      const voltage = latest[schema.col(p.key, 'avg_voltage')];
+      const minV = latest[schema.col(p.key, 'min_voltage')];
+      const maxV = latest[schema.col(p.key, 'max_voltage')];
       const isWarning = voltage < VOLTAGE_MIN_SAFE || voltage > VOLTAGE_MAX_SAFE;
-      totalPower += latest[p.key + '_max_act_power'] || 0;
+      totalPower += latest[schema.col(p.key, 'max_act_power')] || 0;
+
+      const label = isSinglePhase ? 'Voltage' : (p.name + ' Voltage');
 
       html += `
         <div class="status-card ${isWarning ? 'warning' : ''}">
           <div class="phase-indicator" style="background:${p.color}"></div>
-          <div class="card-label">${p.name} Voltage</div>
+          <div class="card-label">${label}</div>
           <div class="card-value">
             ${voltage.toFixed(1)}<span class="card-unit">V</span>
             ${isWarning ? '<span class="warning-badge">OUT OF RANGE</span>' : ''}
           </div>
           <div class="card-detail">
-            Range: ${latest[p.key + '_min_voltage'].toFixed(1)} &ndash; ${latest[p.key + '_max_voltage'].toFixed(1)} V
+            Range: ${minV.toFixed(1)} &ndash; ${maxV.toFixed(1)} V
           </div>
         </div>`;
     }
 
-    // Total power card
-    html += `
-      <div class="status-card">
-        <div class="phase-indicator" style="background:${COLORS.accent}"></div>
-        <div class="card-label">Total Power (latest)</div>
-        <div class="card-value" style="color:${COLORS.accent}">
-          ${totalPower >= 1000 ? (totalPower/1000).toFixed(2) : totalPower.toFixed(0)}<span class="card-unit">${totalPower >= 1000 ? 'kW' : 'W'}</span>
-        </div>
-        <div class="card-detail">
-          A: ${latest.a_max_act_power.toFixed(0)}W &nbsp;
-          B: ${latest.b_max_act_power.toFixed(0)}W &nbsp;
-          C: ${latest.c_max_act_power.toFixed(0)}W
-        </div>
-      </div>`;
+    if (!isSinglePhase) {
+      // Total power card (3-phase only — redundant with the single phase card otherwise)
+      const detail = schema.phases.map(p =>
+        `${p.name.replace('Phase ', '')}: ${latest[schema.col(p.key, 'max_act_power')].toFixed(0)}W`
+      ).join(' &nbsp; ');
+      html += `
+        <div class="status-card">
+          <div class="phase-indicator" style="background:${COLORS.accent}"></div>
+          <div class="card-label">Total Power (latest)</div>
+          <div class="card-value" style="color:${COLORS.accent}">
+            ${totalPower >= 1000 ? (totalPower/1000).toFixed(2) : totalPower.toFixed(0)}<span class="card-unit">${totalPower >= 1000 ? 'kW' : 'W'}</span>
+          </div>
+          <div class="card-detail">${detail}</div>
+        </div>`;
+    } else {
+      // Single-phase: show a power card using the one phase's power
+      const power = latest[schema.col(schema.phases[0].key, 'max_act_power')] || 0;
+      html += `
+        <div class="status-card">
+          <div class="phase-indicator" style="background:${COLORS.accent}"></div>
+          <div class="card-label">Power (latest)</div>
+          <div class="card-value" style="color:${COLORS.accent}">
+            ${power >= 1000 ? (power/1000).toFixed(2) : power.toFixed(0)}<span class="card-unit">${power >= 1000 ? 'kW' : 'W'}</span>
+          </div>
+        </div>`;
+    }
 
     container.innerHTML = html;
   }
@@ -892,23 +943,17 @@ header h1 .icon {
 
     const MAX_POINTS = 2000;
 
-    const aAvg = rawData.map(r => r.a_avg_voltage);
-    const bAvg = rawData.map(r => r.b_avg_voltage);
-    const cAvg = rawData.map(r => r.c_avg_voltage);
-    const aMin = rawData.map(r => r.a_min_voltage);
-    const aMax = rawData.map(r => r.a_max_voltage);
-    const bMin = rawData.map(r => r.b_min_voltage);
-    const bMax = rawData.map(r => r.b_max_voltage);
-    const cMin = rawData.map(r => r.c_min_voltage);
-    const cMax = rawData.map(r => r.c_max_voltage);
-
-    const aAvgDS = downsampleSeries(timestamps, aAvg, MAX_POINTS);
-    const bAvgDS = downsampleSeries(timestamps, bAvg, MAX_POINTS);
-    const cAvgDS = downsampleSeries(timestamps, cAvg, MAX_POINTS);
-
-    const aBand = downsampleBand(timestamps, aMin, aMax, MAX_POINTS);
-    const bBand = downsampleBand(timestamps, bMin, bMax, MAX_POINTS);
-    const cBand = downsampleBand(timestamps, cMin, cMax, MAX_POINTS);
+    // Per-phase downsampled series
+    const perPhase = schema.phases.map(p => {
+      const avg = rawData.map(r => r[schema.col(p.key, 'avg_voltage')]);
+      const min = rawData.map(r => r[schema.col(p.key, 'min_voltage')]);
+      const max = rawData.map(r => r[schema.col(p.key, 'max_voltage')]);
+      return {
+        phase: p,
+        avgDS: downsampleSeries(timestamps, avg, MAX_POINTS),
+        band: downsampleBand(timestamps, min, max, MAX_POINTS)
+      };
+    });
 
     // Build band data for custom series: [timestamp, min, max, prevTimestamp, prevMin, prevMax]
     function buildBandData(band) {
@@ -941,6 +986,62 @@ header h1 .icon {
       };
     }
 
+    // Convert "#RRGGBB" to "rgba(r,g,b,a)" for band fill
+    function bandColor(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+      return `rgba(${r}, ${g}, ${b}, 0.12)`;
+    }
+
+    const seriesList = [];
+    // Band series first (lower z)
+    for (const pp of perPhase) {
+      seriesList.push({
+        name: pp.phase.name + ' Band',
+        type: 'custom',
+        renderItem: renderBandItem,
+        dimensions: ['ts', 'min', 'max', 'prevTs', 'prevMin', 'prevMax'],
+        encode: { x: 0, y: [1, 2] },
+        data: buildBandData(pp.band),
+        itemStyle: { color: bandColor(pp.phase.color) },
+        z: 1,
+        silent: true
+      });
+    }
+    // Nominal 230V reference
+    seriesList.push({
+      name: '230V Nominal',
+      type: 'line',
+      markLine: {
+        silent: true,
+        symbol: 'none',
+        lineStyle: { color: COLORS.nominal, type: 'dashed', width: 1.5 },
+        label: {
+          show: true,
+          formatter: '230V',
+          color: COLORS.textMuted,
+          fontSize: 10,
+          position: 'insideEndTop'
+        },
+        data: [{ yAxis: 230 }]
+      },
+      data: [],
+      symbol: 'none',
+      lineStyle: { opacity: 0 }
+    });
+    // Average lines
+    for (const pp of perPhase) {
+      seriesList.push({
+        name: pp.phase.name,
+        type: 'line',
+        data: pp.avgDS,
+        symbol: 'none',
+        lineStyle: { width: 1.8, color: pp.phase.color },
+        itemStyle: { color: pp.phase.color },
+        z: 5
+      });
+    }
+
     const option = {
       backgroundColor: 'transparent',
       tooltip: {
@@ -963,7 +1064,7 @@ header h1 .icon {
         }
       },
       legend: {
-        data: ['Phase A', 'Phase B', 'Phase C'],
+        data: schema.phases.map(p => p.name),
         top: 0,
         right: 0,
         textStyle: { color: COLORS.textMuted },
@@ -1022,91 +1123,7 @@ header h1 .icon {
           filterMode: 'none'
         }
       ],
-      series: [
-        // Voltage bands using custom series for correct min-max rendering
-        {
-          name: 'A Band',
-          type: 'custom',
-          renderItem: renderBandItem,
-          dimensions: ['ts', 'min', 'max', 'prevTs', 'prevMin', 'prevMax'],
-          encode: { x: 0, y: [1, 2] },
-          data: buildBandData(aBand),
-          itemStyle: { color: 'rgba(245, 158, 11, 0.12)' },
-          z: 1,
-          silent: true
-        },
-        {
-          name: 'B Band',
-          type: 'custom',
-          renderItem: renderBandItem,
-          dimensions: ['ts', 'min', 'max', 'prevTs', 'prevMin', 'prevMax'],
-          encode: { x: 0, y: [1, 2] },
-          data: buildBandData(bBand),
-          itemStyle: { color: 'rgba(59, 130, 246, 0.12)' },
-          z: 1,
-          silent: true
-        },
-        {
-          name: 'C Band',
-          type: 'custom',
-          renderItem: renderBandItem,
-          dimensions: ['ts', 'min', 'max', 'prevTs', 'prevMin', 'prevMax'],
-          encode: { x: 0, y: [1, 2] },
-          data: buildBandData(cBand),
-          itemStyle: { color: 'rgba(244, 63, 94, 0.12)' },
-          z: 1,
-          silent: true
-        },
-        // Nominal 230V reference
-        {
-          name: '230V Nominal',
-          type: 'line',
-          markLine: {
-            silent: true,
-            symbol: 'none',
-            lineStyle: { color: COLORS.nominal, type: 'dashed', width: 1.5 },
-            label: {
-              show: true,
-              formatter: '230V',
-              color: COLORS.textMuted,
-              fontSize: 10,
-              position: 'insideEndTop'
-            },
-            data: [{ yAxis: 230 }]
-          },
-          data: [],
-          symbol: 'none',
-          lineStyle: { opacity: 0 }
-        },
-        // Average lines
-        {
-          name: 'Phase A',
-          type: 'line',
-          data: aAvgDS,
-          symbol: 'none',
-          lineStyle: { width: 1.8, color: COLORS.phaseA },
-          itemStyle: { color: COLORS.phaseA },
-          z: 5
-        },
-        {
-          name: 'Phase B',
-          type: 'line',
-          data: bAvgDS,
-          symbol: 'none',
-          lineStyle: { width: 1.8, color: COLORS.phaseB },
-          itemStyle: { color: COLORS.phaseB },
-          z: 5
-        },
-        {
-          name: 'Phase C',
-          type: 'line',
-          data: cAvgDS,
-          symbol: 'none',
-          lineStyle: { width: 1.8, color: COLORS.phaseC },
-          itemStyle: { color: COLORS.phaseC },
-          z: 5
-        }
-      ]
+      series: seriesList
     };
 
     voltageChart.setOption(option);
@@ -1128,23 +1145,24 @@ header h1 .icon {
     // Compute hourly averages per phase
     const hourlyData = {};
     for (let h = 0; h < 24; h++) {
-      hourlyData[h] = { a: [], b: [], c: [] };
+      hourlyData[h] = {};
+      for (const p of schema.phases) hourlyData[h][p.key] = [];
     }
 
     for (const r of rawData) {
       const h = new Date(r.timestamp * 1000).getHours();
-      hourlyData[h].a.push(r.a_avg_voltage);
-      hourlyData[h].b.push(r.b_avg_voltage);
-      hourlyData[h].c.push(r.c_avg_voltage);
+      for (const p of schema.phases) {
+        hourlyData[h][p.key].push(r[schema.col(p.key, 'avg_voltage')]);
+      }
     }
 
     const hours = [];
-    const aHourly = [], bHourly = [], cHourly = [];
+    const perPhaseHourly = schema.phases.map(() => []);
     for (let h = 0; h < 24; h++) {
       hours.push(h + ':00');
-      aHourly.push(avg(hourlyData[h].a));
-      bHourly.push(avg(hourlyData[h].b));
-      cHourly.push(avg(hourlyData[h].c));
+      schema.phases.forEach((p, i) => {
+        perPhaseHourly[i].push(avg(hourlyData[h][p.key]));
+      });
     }
 
     const option = {
@@ -1165,7 +1183,7 @@ header h1 .icon {
         }
       },
       legend: {
-        data: ['Phase A', 'Phase B', 'Phase C'],
+        data: schema.phases.map(p => p.name),
         top: 0,
         right: 0,
         textStyle: { color: COLORS.textMuted, fontSize: 11 },
@@ -1195,29 +1213,13 @@ header h1 .icon {
         splitLine: { lineStyle: { color: COLORS.grid, type: 'dashed' } },
         scale: true
       },
-      series: [
-        {
-          name: 'Phase A',
-          type: 'bar',
-          data: aHourly,
-          itemStyle: { color: COLORS.phaseA, borderRadius: [3, 3, 0, 0] },
-          barMaxWidth: 12
-        },
-        {
-          name: 'Phase B',
-          type: 'bar',
-          data: bHourly,
-          itemStyle: { color: COLORS.phaseB, borderRadius: [3, 3, 0, 0] },
-          barMaxWidth: 12
-        },
-        {
-          name: 'Phase C',
-          type: 'bar',
-          data: cHourly,
-          itemStyle: { color: COLORS.phaseC, borderRadius: [3, 3, 0, 0] },
-          barMaxWidth: 12
-        }
-      ]
+      series: schema.phases.map((p, i) => ({
+        name: p.name,
+        type: 'bar',
+        data: perPhaseHourly[i],
+        itemStyle: { color: p.color, borderRadius: [3, 3, 0, 0] },
+        barMaxWidth: 12
+      }))
     };
 
     voltageHeatmapChart.setOption(option);
@@ -1234,20 +1236,25 @@ header h1 .icon {
     for (const r of rawData) {
       const d = new Date(r.timestamp * 1000);
       const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-      if (!daily[key]) daily[key] = { a: 0, b: 0, c: 0 };
-      daily[key].a += (r.a_total_act_energy || 0);
-      daily[key].b += (r.b_total_act_energy || 0);
-      daily[key].c += (r.c_total_act_energy || 0);
+      if (!daily[key]) {
+        daily[key] = {};
+        for (const p of schema.phases) daily[key][p.key] = 0;
+      }
+      for (const p of schema.phases) {
+        daily[key][p.key] += (r[schema.col(p.key, 'total_act_energy')] || 0);
+      }
     }
 
     const days = Object.keys(daily).sort();
-    const aDaily = days.map(d => +(daily[d].a / 1000).toFixed(3));
-    const bDaily = days.map(d => +(daily[d].b / 1000).toFixed(3));
-    const cDaily = days.map(d => +(daily[d].c / 1000).toFixed(3));
+    const perPhaseDaily = schema.phases.map(p =>
+      days.map(d => +(daily[d][p.key] / 1000).toFixed(3))
+    );
     const dayLabels = days.map(d => {
       const parts = d.split('-');
       return parseInt(parts[2]) + ' ' + new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { month: 'short' });
     });
+
+    const lastIdx = schema.phases.length - 1;
 
     const option = {
       backgroundColor: 'transparent',
@@ -1265,13 +1272,15 @@ header h1 .icon {
               `<span>${p.marker} ${p.seriesName}</span>` +
               `<span style="font-weight:600">${p.value.toFixed(2)} kWh</span></div>`;
           }
-          s += `<div style="border-top:1px solid ${COLORS.grid};margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;gap:16px;font-weight:600">` +
-            `<span>Total</span><span>${total.toFixed(2)} kWh</span></div>`;
+          if (params.length > 1) {
+            s += `<div style="border-top:1px solid ${COLORS.grid};margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;gap:16px;font-weight:600">` +
+              `<span>Total</span><span>${total.toFixed(2)} kWh</span></div>`;
+          }
           return s;
         }
       },
       legend: {
-        data: ['Phase A', 'Phase B', 'Phase C'],
+        data: schema.phases.map(p => p.name),
         top: 0,
         right: 0,
         textStyle: { color: COLORS.textMuted, fontSize: 11 },
@@ -1300,32 +1309,17 @@ header h1 .icon {
         axisLabel: { color: COLORS.textMuted, fontSize: 10 },
         splitLine: { lineStyle: { color: COLORS.grid, type: 'dashed' } }
       },
-      series: [
-        {
-          name: 'Phase A',
-          type: 'bar',
-          stack: 'energy',
-          data: aDaily,
-          itemStyle: { color: COLORS.phaseA, borderRadius: [0, 0, 0, 0] },
-          barMaxWidth: 20
+      series: schema.phases.map((p, i) => ({
+        name: p.name,
+        type: 'bar',
+        stack: 'energy',
+        data: perPhaseDaily[i],
+        itemStyle: {
+          color: p.color,
+          borderRadius: i === lastIdx ? [3, 3, 0, 0] : [0, 0, 0, 0]
         },
-        {
-          name: 'Phase B',
-          type: 'bar',
-          stack: 'energy',
-          data: bDaily,
-          itemStyle: { color: COLORS.phaseB },
-          barMaxWidth: 20
-        },
-        {
-          name: 'Phase C',
-          type: 'bar',
-          stack: 'energy',
-          data: cDaily,
-          itemStyle: { color: COLORS.phaseC, borderRadius: [3, 3, 0, 0] },
-          barMaxWidth: 20
-        }
-      ]
+        barMaxWidth: 20
+      }))
     };
 
     dailyEnergyChart.setOption(option);
@@ -1339,13 +1333,10 @@ header h1 .icon {
 
     const MAX_POINTS = 2000;
 
-    const aPower = rawData.map(r => r.a_max_act_power || 0);
-    const bPower = rawData.map(r => r.b_max_act_power || 0);
-    const cPower = rawData.map(r => r.c_max_act_power || 0);
-
-    const aPowerDS = downsampleSeries(timestamps, aPower, MAX_POINTS);
-    const bPowerDS = downsampleSeries(timestamps, bPower, MAX_POINTS);
-    const cPowerDS = downsampleSeries(timestamps, cPower, MAX_POINTS);
+    const perPhase = schema.phases.map(p => {
+      const power = rawData.map(r => r[schema.col(p.key, 'max_act_power')] || 0);
+      return { phase: p, dataDS: downsampleSeries(timestamps, power, MAX_POINTS) };
+    });
 
     const option = {
       backgroundColor: 'transparent',
@@ -1365,13 +1356,15 @@ header h1 .icon {
               `<span>${p.marker} ${p.seriesName}</span>` +
               `<span style="font-weight:600">${p.value[1].toFixed(1)} W</span></div>`;
           }
-          s += `<div style="border-top:1px solid ${COLORS.grid};margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;gap:16px;font-weight:600">` +
-            `<span>Total</span><span>${total.toFixed(1)} W</span></div>`;
+          if (params.length > 1) {
+            s += `<div style="border-top:1px solid ${COLORS.grid};margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;gap:16px;font-weight:600">` +
+              `<span>Total</span><span>${total.toFixed(1)} W</span></div>`;
+          }
           return s;
         }
       },
       legend: {
-        data: ['Phase A', 'Phase B', 'Phase C'],
+        data: schema.phases.map(p => p.name),
         top: 0,
         right: 0,
         textStyle: { color: COLORS.textMuted },
@@ -1428,44 +1421,18 @@ header h1 .icon {
           filterMode: 'none'
         }
       ],
-      series: [
-        {
-          name: 'Phase A',
-          type: 'line',
-          stack: 'power',
-          data: aPowerDS,
-          symbol: 'none',
-          lineStyle: { width: 0 },
-          areaStyle: { color: COLORS.phaseA, opacity: 0.7 },
-          itemStyle: { color: COLORS.phaseA },
-          emphasis: { focus: 'series' },
-          large: true
-        },
-        {
-          name: 'Phase B',
-          type: 'line',
-          stack: 'power',
-          data: bPowerDS,
-          symbol: 'none',
-          lineStyle: { width: 0 },
-          areaStyle: { color: COLORS.phaseB, opacity: 0.7 },
-          itemStyle: { color: COLORS.phaseB },
-          emphasis: { focus: 'series' },
-          large: true
-        },
-        {
-          name: 'Phase C',
-          type: 'line',
-          stack: 'power',
-          data: cPowerDS,
-          symbol: 'none',
-          lineStyle: { width: 0 },
-          areaStyle: { color: COLORS.phaseC, opacity: 0.7 },
-          itemStyle: { color: COLORS.phaseC },
-          emphasis: { focus: 'series' },
-          large: true
-        }
-      ]
+      series: perPhase.map(pp => ({
+        name: pp.phase.name,
+        type: 'line',
+        stack: 'power',
+        data: pp.dataDS,
+        symbol: 'none',
+        lineStyle: { width: 0 },
+        areaStyle: { color: pp.phase.color, opacity: 0.7 },
+        itemStyle: { color: pp.phase.color },
+        emphasis: { focus: 'series' },
+        large: true
+      }))
     };
 
     powerChart.setOption(option);
@@ -1482,14 +1449,8 @@ header h1 .icon {
   function renderSummaryTable() {
     const tbody = document.getElementById('summary-tbody');
 
-    const phases = [
-      { key: 'a', name: 'Phase A', color: COLORS.phaseA },
-      { key: 'b', name: 'Phase B', color: COLORS.phaseB },
-      { key: 'c', name: 'Phase C', color: COLORS.phaseC }
-    ];
-
     let html = '';
-    for (const p of phases) {
+    for (const p of schema.phases) {
       let minV = Infinity, maxV = -Infinity, sumV = 0;
       let maxI = -Infinity, sumI = 0;
       let maxP = -Infinity;
@@ -1497,19 +1458,19 @@ header h1 .icon {
       const n = rawData.length;
 
       for (const r of rawData) {
-        const v = r[p.key + '_avg_voltage'];
-        const mn = r[p.key + '_min_voltage'];
-        const mx = r[p.key + '_max_voltage'];
+        const v = r[schema.col(p.key, 'avg_voltage')];
+        const mn = r[schema.col(p.key, 'min_voltage')];
+        const mx = r[schema.col(p.key, 'max_voltage')];
         if (mn < minV) minV = mn;
         if (mx > maxV) maxV = mx;
         sumV += v;
-        const ci = r[p.key + '_max_current'];
-        const ai = r[p.key + '_avg_current'];
+        const ci = r[schema.col(p.key, 'max_current')];
+        const ai = r[schema.col(p.key, 'avg_current')];
         if (ci > maxI) maxI = ci;
         sumI += ai;
-        const pw = r[p.key + '_max_act_power'];
+        const pw = r[schema.col(p.key, 'max_act_power')];
         if (pw > maxP) maxP = pw;
-        totalE += (r[p.key + '_total_act_energy'] || 0);
+        totalE += (r[schema.col(p.key, 'total_act_energy')] || 0);
       }
 
       html += `<tr>
@@ -1524,24 +1485,30 @@ header h1 .icon {
       </tr>`;
     }
 
-    // Total row
-    let totalEnergy = 0;
-    let totalMaxPower = -Infinity;
-    for (const r of rawData) {
-      totalEnergy += (r.a_total_act_energy || 0) + (r.b_total_act_energy || 0) + (r.c_total_act_energy || 0);
-      const tp = (r.a_max_act_power || 0) + (r.b_max_act_power || 0) + (r.c_max_act_power || 0);
-      if (tp > totalMaxPower) totalMaxPower = tp;
+    if (schema.phases.length > 1) {
+      // Total row — only meaningful across multiple phases
+      let totalEnergy = 0;
+      let totalMaxPower = -Infinity;
+      for (const r of rawData) {
+        let rowEnergy = 0, rowPower = 0;
+        for (const p of schema.phases) {
+          rowEnergy += (r[schema.col(p.key, 'total_act_energy')] || 0);
+          rowPower += (r[schema.col(p.key, 'max_act_power')] || 0);
+        }
+        totalEnergy += rowEnergy;
+        if (rowPower > totalMaxPower) totalMaxPower = rowPower;
+      }
+      html += `<tr style="font-weight:600;border-top:2px solid ${COLORS.grid}">
+        <td><span class="phase-label"><span class="phase-dot" style="background:${COLORS.accent}"></span>Total</span></td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num">${totalMaxPower.toFixed(1)}</td>
+        <td class="num">${(totalEnergy / 1000).toFixed(2)}</td>
+      </tr>`;
     }
-    html += `<tr style="font-weight:600;border-top:2px solid ${COLORS.grid}">
-      <td><span class="phase-label"><span class="phase-dot" style="background:${COLORS.accent}"></span>Total</span></td>
-      <td class="num">&mdash;</td>
-      <td class="num">&mdash;</td>
-      <td class="num">&mdash;</td>
-      <td class="num">&mdash;</td>
-      <td class="num">&mdash;</td>
-      <td class="num">${totalMaxPower.toFixed(1)}</td>
-      <td class="num">${(totalEnergy / 1000).toFixed(2)}</td>
-    </tr>`;
 
     tbody.innerHTML = html;
   }

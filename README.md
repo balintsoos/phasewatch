@@ -1,11 +1,11 @@
 # Phasewatch
 
-Interactive dashboard for visualizing data from a **Shelly Pro 3EM** 3-phase energy monitor. Single static HTML file — no build step, no server, just open in a browser.
+Interactive dashboard for visualizing data from **Shelly energy monitors**. Supports both 3-phase (**Shelly Pro 3EM**) and 1-phase (**Shelly 1EM / Pro EM**) CSV exports — the format is detected automatically on load. Single static HTML file — no build step, no server, just open in a browser.
 
 ## Quick Start
 
 1. Open `index.html` in your browser
-2. Drag & drop your Shelly Pro 3EM CSV export (or click "Load CSV")
+2. Drag & drop your Shelly CSV export (or click "Load CSV")
 3. Explore your electricity data
 
 ## Features
@@ -18,6 +18,8 @@ Interactive dashboard for visualizing data from a **Shelly Pro 3EM** 3-phase ene
 | **Daily Energy Consumption** | Stacked bar chart of kWh per day per phase |
 | **Power Consumption** | Stacked area chart of active power over time |
 | **Summary Statistics** | Min/max/avg voltage, current, power, and total energy per phase |
+
+For 1-phase files the per-phase breakdown collapses to a single series with no "Total" aggregation.
 
 ## Interactivity
 
@@ -40,15 +42,21 @@ The dashboard uses **LTTB (Largest Triangle Three Buckets) downsampling** to ren
 
 ## CSV Data Format
 
-The dashboard expects CSV exports from a Shelly Pro 3EM device. The file contains 51 columns at 60-second intervals:
+The dashboard auto-detects two Shelly CSV formats on load:
+
+**3-phase (Shelly Pro 3EM)** — 51 columns, column names prefixed with `a_`, `b_`, `c_` (plus neutral `n_*` currents).
+
+**1-phase (Shelly 1EM / Pro EM)** — 15 columns, no phase prefix (bare `avg_voltage`, `max_act_power`, …).
+
+Both are at 60-second intervals.
 
 | Column Group | Metrics |
 |-------------|---------|
 | **Timestamp** | Unix epoch (seconds) |
-| **Per phase (A, B, C)** | Active energy, fundamental energy, returned energy, reactive energy, min/max/avg voltage, min/max/avg current, min/max active power, min/max apparent power |
-| **Neutral** | Min/max/avg current |
+| **Per phase** | Active energy, fundamental energy, returned energy, reactive energy, min/max/avg voltage, min/max/avg current, min/max active power, min/max apparent power |
+| **Neutral** (3-phase only) | Min/max/avg current |
 
-Column naming convention: `{phase}_{metric}` — e.g. `a_avg_voltage`, `b_max_act_power`, `c_total_act_energy`.
+For the 3-phase format the per-phase columns follow the pattern `{phase}_{metric}` — e.g. `a_avg_voltage`, `b_max_act_power`, `c_total_act_energy`. For 1-phase the `{phase}_` prefix is dropped.
 
 ## Theme
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Phasewatch — a single-file static HTML dashboard for visualizing 3-phase electricity data from a Shelly Pro 3EM device. No build step, no server, no dependencies beyond two CDN scripts.
+Phasewatch — a single-file static HTML dashboard for visualizing electricity data from Shelly energy meters. Supports both 3-phase (Shelly Pro 3EM) and 1-phase (Shelly 1EM / Pro EM) CSV exports. No build step, no server, no dependencies beyond two CDN scripts.
 
 ## Development
 
@@ -21,11 +21,20 @@ There is no build, test, or lint toolchain. The entire application lives in `ind
 
 ### Data flow
 
-CSV file → PapaParse (web worker mode) → `rawData[]` (typed objects) → `timestamps[]` (Unix ms) → 6 render functions, each creating/updating an ECharts instance.
+CSV file → PapaParse (web worker mode) → `rawData[]` (typed objects) → schema detection → `timestamps[]` (Unix ms) → 6 render functions, each creating/updating an ECharts instance.
+
+### Schema
+
+The CSV format is auto-detected from the first row's column names and captured in a module-scoped `schema` object:
+
+- **3-phase** (headers like `a_avg_voltage`): `phases = [A, B, C]`, `col(key, metric) = ${key}_${metric}`
+- **1-phase** (headers like `avg_voltage`): `phases = [single]`, `col(key, metric) = metric`
+
+All render functions iterate `schema.phases` and resolve column names via `schema.col(phaseKey, metric)`, so they work for both formats unchanged. For 1-phase: the "Total" row/card/tooltip aggregations are hidden (one phase == the total), the single series uses the accent color, and the label is "Voltage" / "Power" rather than "Phase A".
 
 ### State
 
-All state is module-scoped inside the IIFE: `rawData`, `timestamps`, `dataRange`, and 4 ECharts chart instances (`voltageChart`, `voltageHeatmapChart`, `dailyEnergyChart`, `powerChart`).
+All state is module-scoped inside the IIFE: `rawData`, `timestamps`, `dataRange`, `schema`, and 4 ECharts chart instances (`voltageChart`, `voltageHeatmapChart`, `dailyEnergyChart`, `powerChart`).
 
 ### Key algorithms
 
@@ -46,3 +55,4 @@ All state is module-scoped inside the IIFE: `rawData`, `timestamps`, `dataRange`
 
 - `SPECIFICATION.md` — Complete spec covering data format, design system, chart configs, and all implementation details. Sufficient to regenerate the project from scratch.
 - `index.html` — The entire application.
+- `testdata/` — Sample Shelly CSV exports (3-phase and 1-phase) for manual testing. Gitignored.
